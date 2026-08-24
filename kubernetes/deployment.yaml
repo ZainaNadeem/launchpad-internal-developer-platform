@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: launchpad-demo
+
+spec:
+  replicas: 3
+
+  selector:
+    matchLabels:
+      app: launchpad-demo
+
+  template:
+    metadata:
+      labels:
+        app: launchpad-demo
+
+    spec:
+      containers:
+        - name: launchpad-demo
+          image: launchpad-demo:latest
+          imagePullPolicy: Never
+
+          ports:
+            - containerPort: 8000
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
