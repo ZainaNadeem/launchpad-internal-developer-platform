@@ -28,12 +28,14 @@ htmlcov/
 # Logs
 *.log
 
-# Terraform - we'll need these later
+# Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
-.terraform.lock.hcl
 crash.log
+
+# Terraform-generated demo artifacts
+infrastructure/terraform/launchpad-generated.txt
 
 # Local Kubernetes files
 *.kubeconfig
