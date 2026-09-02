@@ -2,21 +2,26 @@ terraform {
   required_version = ">= 1.5.0"
 
   required_providers {
-    local = {
-      source  = "hashicorp/local"
-      version = "~> 2.5"
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
     }
   }
 }
 
-provider "local" {}
+provider "aws" {
+  region = var.aws_region
+}
 
-resource "local_file" "launchpad_metadata" {
-  filename = "${path.module}/launchpad-generated.txt"
+resource "aws_vpc" "launchpad" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 
-  content = <<-EOT
-  project=LaunchPad
-  managed_by=Terraform
-  purpose=Internal Developer Platform
-  EOT
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-vpc"
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
 }
