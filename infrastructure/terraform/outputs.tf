@@ -17,3 +17,8 @@ output "private_subnet_id" {
   description = "ID of the LaunchPad private subnet"
   value       = aws_subnet.private.id
 }
+
+output "platform_security_group_id" {
+  description = "Security group for LaunchPad platform workloads"
+  value       = aws_security_group.platform.id
+}
