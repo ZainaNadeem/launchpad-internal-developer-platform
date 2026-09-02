@@ -22,3 +22,8 @@ output "platform_security_group_id" {
   description = "Security group for LaunchPad platform workloads"
   value       = aws_security_group.platform.id
 }
+
+output "platform_role_name" {
+  description = "IAM role for LaunchPad platform workloads"
+  value       = aws_iam_role.platform.name
+}
