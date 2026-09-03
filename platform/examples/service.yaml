@@ -1,0 +1,15 @@
+name: launchpad-demo
+image: launchpad-demo:latest
+port: 8000
+replicas: 3
+health_path: /health
+
+resources:
+  cpu: 100m
+  memory: 64Mi
+
+autoscaling:
+  enabled: true
+  min_replicas: 3
+  max_replicas: 10
+  target_cpu: 70
