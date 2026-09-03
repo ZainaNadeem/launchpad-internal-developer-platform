@@ -49,6 +49,122 @@ def apply_defaults(service):
 
     return service
 
+def build_deployment(service):
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": service["name"],
+        },
+        "spec": {
+            "replicas": service["replicas"],
+            "selector": {
+                "matchLabels": {
+                    "app": service["name"],
+                }
+            },
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": service["name"],
+                    }
+                },
+                "spec": {
+                    "containers": [
+                        {
+                            "name": service["name"],
+                            "image": service["image"],
+                            "ports": [
+                                {
+                                    "containerPort": service["port"],
+                                }
+                            ],
+                            "readinessProbe": {
+                                "httpGet": {
+                                    "path": service["health_path"],
+                                    "port": service["port"],
+                                }
+                            },
+                            "livenessProbe": {
+                                "httpGet": {
+                                    "path": service["health_path"],
+                                    "port": service["port"],
+                                }
+                            },
+                            "resources": {
+                                "requests": {
+                                    "cpu": service["resources"]["cpu"],
+                                    "memory": service["resources"]["memory"],
+                                },
+                                "limits": {
+                                    "cpu": service["resources"]["cpu"],
+                                    "memory": service["resources"]["memory"],
+                                },
+                            },
+                        }
+                    ]
+                },
+            },
+        },
+    }
+
+
+def build_service(service):
+    return {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": service["name"],
+        },
+        "spec": {
+            "selector": {
+                "app": service["name"],
+            },
+            "ports": [
+                {
+                    "port": 80,
+                    "targetPort": service["port"],
+                }
+            ],
+            "type": "ClusterIP",
+        },
+    }
+
+
+def build_hpa(service):
+    autoscaling = service["autoscaling"]
+
+    if not autoscaling["enabled"]:
+        return None
+
+    return {
+        "apiVersion": "autoscaling/v2",
+        "kind": "HorizontalPodAutoscaler",
+        "metadata": {
+            "name": service["name"],
+        },
+        "spec": {
+            "scaleTargetRef": {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "name": service["name"],
+            },
+            "minReplicas": autoscaling["min_replicas"],
+            "maxReplicas": autoscaling["max_replicas"],
+            "metrics": [
+                {
+                    "type": "Resource",
+                    "resource": {
+                        "name": "cpu",
+                        "target": {
+                            "type": "Utilization",
+                            "averageUtilization": autoscaling["target_cpu"],
+                        },
+                    },
+                }
+            ],
+        },
+    }
 
 def main():
     if len(sys.argv) != 2:
@@ -64,8 +180,26 @@ def main():
     validate_service(service)
     service = apply_defaults(service)
 
+    deployment = build_deployment(service)
+    kubernetes_service = build_service(service)
+    hpa = build_hpa(service)
+
+    manifests = [deployment, kubernetes_service]
+
+    if hpa:
+        manifests.append(hpa)
+
+    output_path = Path("platform/generated.yaml")
+
+    with open(output_path, "w") as file:
+        yaml.safe_dump_all(
+            manifests,
+            file,
+            sort_keys=False,
+        )
+
     print("LaunchPad service validated successfully")
-    print(yaml.safe_dump(service, sort_keys=False))
+    print(f"Generated Kubernetes manifests: {output_path}")
 
 
 if __name__ == "__main__":
