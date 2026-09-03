@@ -39,3 +39,4 @@ infrastructure/terraform/launchpad-generated.txt
 
 # Local Kubernetes files
 *.kubeconfigplatform/generated.yaml
+/platform/generated.yaml
