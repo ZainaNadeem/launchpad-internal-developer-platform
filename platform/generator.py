@@ -48,7 +48,7 @@ def apply_defaults(service):
 
 
 def build_deployment(service):
-    return {
+    deployment = {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
         "metadata": {
@@ -56,6 +56,13 @@ def build_deployment(service):
         },
         "spec": {
             "replicas": service["replicas"],
+            "strategy": {
+                "type": "RollingUpdate",
+                "rollingUpdate": {
+                    "maxUnavailable": 0,
+                    "maxSurge": 1,
+                },
+            },
             "selector": {
                 "matchLabels": {
                     "app": service["name"],
@@ -111,6 +118,11 @@ def build_deployment(service):
             },
         },
     }
+
+
+    if service["autoscaling"]["enabled"]:
+        deployment["spec"].pop("replicas")
+    return deployment
 
 
 def build_service(service):

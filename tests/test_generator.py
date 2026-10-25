@@ -77,7 +77,7 @@ def test_build_deployment():
 
     assert deployment["kind"] == "Deployment"
     assert deployment["metadata"]["name"] == "test-api"
-    assert deployment["spec"]["replicas"] == 2
+    assert "replicas" not in deployment["spec"]
 
 
 def test_build_service():
@@ -247,3 +247,45 @@ def test_generation_blocks_limit_below_request():
 
     with pytest.raises(ValueError, match="Preflight blocked generation"):
         generator.generate(service)
+
+
+def test_fixed_replica_deployment_keeps_requested_count():
+    service = valid_service()
+    service["autoscaling"]["enabled"] = False
+    service["replicas"] = 3
+
+    deployment = build_deployment(service)
+
+    assert deployment["spec"]["replicas"] == 3
+
+
+def test_deployment_has_explicit_rolling_update_policy():
+    deployment = build_deployment(valid_service())
+
+    assert deployment["spec"]["strategy"] == {
+        "type": "RollingUpdate",
+        "rollingUpdate": {
+            "maxUnavailable": 0,
+            "maxSurge": 1,
+        },
+    }
+
+
+def test_autoscaled_generation_omits_fixed_replicas_and_keeps_hpa_bounds():
+    service = valid_service()
+
+    manifests, _ = generator.generate(service)
+
+    deployment = manifests[0]
+    hpa = next(
+        item
+        for item in manifests
+        if item["kind"] == "HorizontalPodAutoscaler"
+    )
+
+    assert "replicas" not in deployment["spec"]
+    assert hpa["spec"]["minReplicas"] == 2
+    assert hpa["spec"]["maxReplicas"] == 5
+    assert hpa["spec"]["scaleTargetRef"]["name"] == (
+        deployment["metadata"]["name"]
+    )
