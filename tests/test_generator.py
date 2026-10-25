@@ -289,3 +289,44 @@ def test_autoscaled_generation_omits_fixed_replicas_and_keeps_hpa_bounds():
     assert hpa["spec"]["scaleTargetRef"]["name"] == (
         deployment["metadata"]["name"]
     )
+
+
+def test_failed_output_replace_preserves_manifest_and_cleans_temporary(tmp_path, monkeypatch):
+    output = tmp_path / "generated.yaml"
+    output.write_text("original", encoding="utf-8")
+
+    def reject_replace(source, destination):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(generator.os, "replace", reject_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        generator.write_manifests(output, "replacement")
+    assert output.read_text(encoding="utf-8") == "original"
+    assert list(tmp_path.iterdir()) == [output]
+
+
+def test_readiness_is_evaluated_before_defaults_and_input_is_unchanged():
+    from copy import deepcopy
+
+    service = {"name": "api", "image": "api:local", "port": 8000}
+    original = deepcopy(service)
+    manifests, report = generator.generate(service)
+    assert service == original
+    assert report["score"] == 0
+    assert len(manifests) == 2
+    assert manifests[0]["spec"]["replicas"] == 1
+
+
+def test_strict_cli_accepts_ready_fixture(tmp_path):
+    fixture = Path(__file__).parent / "fixtures" / "policy-ready.yaml"
+    output = tmp_path / "ready.yaml"
+    assert generator.main([str(fixture), "--strict", "-o", str(output)]) == 0
+    assert len(list(generator.yaml.safe_load_all(output.read_text()))) == 3
+
+
+def test_cli_refuses_to_overwrite_its_input(tmp_path):
+    source = tmp_path / "service.yaml"
+    original = generator.yaml.safe_dump(valid_service())
+    source.write_text(original, encoding="utf-8")
+    assert generator.main([str(source), "-o", str(source)]) == 1
+    assert source.read_text(encoding="utf-8") == original

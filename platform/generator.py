@@ -1,5 +1,7 @@
 import argparse
 import importlib.util
+import os
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 
@@ -16,7 +18,7 @@ preflight_spec.loader.exec_module(preflight)
 
 
 def load_service(path):
-    with open(path, "r") as file:
+    with open(path, "r", encoding="utf-8") as file:
         return yaml.safe_load(file)
 
 
@@ -118,8 +120,6 @@ def build_deployment(service):
             },
         },
     }
-
-
     if service["autoscaling"]["enabled"]:
         deployment["spec"].pop("replicas")
     return deployment
@@ -206,6 +206,23 @@ def generate(service, strict=False):
     return manifests, report
 
 
+def write_manifests(path, content):
+    """Replace output only after a complete write on the same filesystem."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as file:
+            temporary = Path(file.name)
+            file.write(content)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Generate Kubernetes manifests from a LaunchPad service."
@@ -226,12 +243,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
+        if args.service.resolve() == args.output.resolve():
+            raise ValueError("Input specification and output manifest must be different files.")
         service = load_service(args.service)
         manifests, report = generate(service, strict=args.strict)
 
         content = yaml.safe_dump_all(manifests, sort_keys=False)
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(content, encoding="utf-8")
+        write_manifests(args.output, content)
     except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
         print(f"FAIL  {error}")
         return 1

@@ -25,21 +25,27 @@ REQUEST_LATENCY = Histogram(
 
 @app.middleware("http")
 async def collect_metrics(request: Request, call_next):
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     response = await call_next(request)
 
-    duration = time.time() - start_time
+    duration = time.perf_counter() - start_time
+    # Route templates bound label cardinality; arbitrary 404 paths share a label.
+    route = request.scope.get("route")
+    endpoint = getattr(route, "path", "unmatched")
+    method = request.method if request.method in {
+        "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT"
+    } else "OTHER"
 
     REQUEST_COUNT.labels(
-        method=request.method,
-        endpoint=request.url.path,
+        method=method,
+        endpoint=endpoint,
         status_code=response.status_code
     ).inc()
 
     REQUEST_LATENCY.labels(
-        method=request.method,
-        endpoint=request.url.path
+        method=method,
+        endpoint=endpoint
     ).observe(duration)
 
     return response
