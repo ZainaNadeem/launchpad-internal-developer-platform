@@ -1,10 +1,18 @@
-import sys
+import argparse
+import importlib.util
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
 
 
-REQUIRED_FIELDS = ["name", "image", "port"]
+PREFLIGHT_PATH = Path(__file__).resolve().with_name("preflight.py")
+preflight_spec = importlib.util.spec_from_file_location(
+    "launchpad_preflight",
+    PREFLIGHT_PATH,
+)
+preflight = importlib.util.module_from_spec(preflight_spec)
+preflight_spec.loader.exec_module(preflight)
 
 
 def load_service(path):
@@ -13,41 +21,31 @@ def load_service(path):
 
 
 def validate_service(service):
-    missing = [
-        field
-        for field in REQUIRED_FIELDS
-        if field not in service
-    ]
-
-    if missing:
+    findings = preflight.check_schema(service)
+    if findings:
         raise ValueError(
-            f"Missing required fields: {', '.join(missing)}"
+            "\n".join(
+                f"{finding['message']} Fix: {finding['recommendation']}"
+                for finding in findings
+            )
         )
 
 
 def apply_defaults(service):
-    service.setdefault("replicas", 1)
-    service.setdefault("health_path", "/health")
+    """Return a separate configuration with missing defaults filled in."""
+    result = deepcopy(service)
+    result.setdefault("replicas", 1)
+    result.setdefault("health_path", "/health")
+    resources = result.setdefault("resources", {})
+    resources.setdefault("cpu", "100m")
+    resources.setdefault("memory", "128Mi")
+    autoscaling = result.setdefault("autoscaling", {})
+    autoscaling.setdefault("enabled", False)
+    autoscaling.setdefault("min_replicas", 1)
+    autoscaling.setdefault("max_replicas", 3)
+    autoscaling.setdefault("target_cpu", 70)
+    return result
 
-    service.setdefault(
-        "resources",
-        {
-            "cpu": "100m",
-            "memory": "128Mi",
-        },
-    )
-
-    service.setdefault(
-        "autoscaling",
-        {
-            "enabled": False,
-            "min_replicas": 1,
-            "max_replicas": 3,
-            "target_cpu": 70,
-        },
-    )
-
-    return service
 
 def build_deployment(service):
     return {
@@ -166,41 +164,60 @@ def build_hpa(service):
         },
     }
 
-def main():
-    if len(sys.argv) != 2:
-        print(
-            "Usage: python -m platform.generator "
-            "<service.yaml>"
+def generate(service, strict=False):
+    """Check the original specification before applying defaults."""
+    report = preflight.evaluate(service)
+    if preflight.exit_code(report, strict=strict):
+        recommendations = [
+            f"{finding['message']} Fix: {finding['recommendation']}"
+            for finding in report["findings"]
+            if finding["level"] != "PASS"
+        ]
+        raise ValueError(
+            "Preflight blocked generation:\n"
+            + "\n".join(recommendations)
         )
-        sys.exit(1)
-
-    path = Path(sys.argv[1])
-
-    service = load_service(path)
-    validate_service(service)
-    service = apply_defaults(service)
-
-    deployment = build_deployment(service)
-    kubernetes_service = build_service(service)
-    hpa = build_hpa(service)
-
-    manifests = [deployment, kubernetes_service]
-
-    if hpa:
+    config = apply_defaults(service)
+    manifests = [
+        build_deployment(config),
+        build_service(config),
+    ]
+    hpa = build_hpa(config)
+    if hpa is not None:
         manifests.append(hpa)
+    return manifests, report
 
-    output_path = Path("platform/generated.yaml")
 
-    with open(output_path, "w") as file:
-        yaml.safe_dump_all(
-            manifests,
-            file,
-            sort_keys=False,
-        )
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Generate Kubernetes manifests from a LaunchPad service."
+    )
+    parser.add_argument("service", type=Path)
+    parser.add_argument(
+        "-o", "--output", type=Path, default=Path("platform/generated.yaml"),
+        help="Output manifest path (default: platform/generated.yaml).",
+    )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="Block generation on readiness warnings.",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        service = load_service(args.service)
+        manifests, report = generate(service, strict=args.strict)
+        with args.output.open("w", encoding="utf-8") as file:
+            yaml.safe_dump_all(manifests, file, sort_keys=False)
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
+        print(f"FAIL  {error}")
+        return 1
 
     print("LaunchPad service validated successfully")
-    print(f"Generated Kubernetes manifests: {output_path}")
+    print(f"Readiness Score: {report['score']}/100")
+    print(f"Status: {report['status']}")
+    print(f"Generated Kubernetes manifests: {args.output}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

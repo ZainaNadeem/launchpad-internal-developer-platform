@@ -93,3 +93,55 @@ def test_build_hpa():
     assert hpa["kind"] == "HorizontalPodAutoscaler"
     assert hpa["spec"]["minReplicas"] == 2
     assert hpa["spec"]["maxReplicas"] == 5
+
+
+def test_partial_defaults_preserve_input():
+    service = {
+        "name": "test-api",
+        "image": "test-api:latest",
+        "port": 8000,
+        "resources": {"cpu": "200m"},
+        "autoscaling": {"enabled": True},
+    }
+    result = apply_defaults(service)
+    assert result["resources"] == {
+        "cpu": "200m",
+        "memory": "128Mi",
+    }
+    assert result["autoscaling"]["max_replicas"] == 3
+    assert service["resources"] == {"cpu": "200m"}
+    assert service["autoscaling"] == {"enabled": True}
+    assert "replicas" not in service
+
+
+def test_generation_allows_warnings_in_normal_mode():
+    manifests, report = generator.generate(valid_service())
+    assert [item["kind"] for item in manifests] == [
+        "Deployment",
+        "Service",
+        "HorizontalPodAutoscaler",
+    ]
+    assert report["status"] == "NEEDS_ATTENTION"
+
+
+def test_generation_rejects_warnings_in_strict_mode():
+    with pytest.raises(ValueError, match="Preflight blocked generation"):
+        generator.generate(valid_service(), strict=True)
+
+
+@pytest.mark.parametrize(
+    ("document", "flags"),
+    [
+        ("name: test-api\n", []),
+        ("name: test-api\nimage: test-api:latest\nport: 8000\n", ["--strict"]),
+    ],
+)
+def test_rejected_generation_preserves_existing_manifest(tmp_path, document, flags):
+    source = tmp_path / "service.yaml"
+    source.write_text(document, encoding="utf-8")
+    output = tmp_path / "generated.yaml"
+    original = b"existing manifest\n"
+    output.write_bytes(original)
+
+    assert generator.main([str(source), "-o", str(output), *flags]) == 1
+    assert output.read_bytes() == original
