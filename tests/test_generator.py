@@ -145,3 +145,64 @@ def test_rejected_generation_preserves_existing_manifest(tmp_path, document, fla
 
     assert generator.main([str(source), "-o", str(output), *flags]) == 1
     assert output.read_bytes() == original
+
+
+def test_cli_creates_nested_output_and_prints_warning(tmp_path, capsys):
+    source = tmp_path / "service.yaml"
+    source.write_text(
+        generator.yaml.safe_dump(valid_service()),
+        encoding="utf-8",
+    )
+    output = tmp_path / "nested" / "generated.yaml"
+
+    assert generator.main([str(source), "-o", str(output)]) == 0
+
+    manifests = list(
+        generator.yaml.safe_load_all(
+            output.read_text(encoding="utf-8")
+        )
+    )
+    assert [item["kind"] for item in manifests] == [
+        "Deployment",
+        "Service",
+        "HorizontalPodAutoscaler",
+    ]
+
+    terminal = capsys.readouterr().out
+    assert "WARN" in terminal
+    assert "Fix:" in terminal
+
+
+def test_strict_generation_accepts_digest_pinned_service():
+    service = valid_service()
+    service["image"] = "test-api@sha256:" + "a" * 64
+
+    manifests, report = generator.generate(service, strict=True)
+
+    assert len(manifests) == 3
+    assert report["score"] == 100
+
+
+def test_disabled_autoscaling_omits_hpa():
+    service = valid_service()
+    service["autoscaling"]["enabled"] = False
+
+    manifests, _ = generator.generate(service)
+
+    assert [item["kind"] for item in manifests] == [
+        "Deployment",
+        "Service",
+    ]
+
+
+def test_generation_fills_partial_resource_defaults():
+    service = valid_service()
+    service["resources"] = {"cpu": "200m"}
+
+    manifests, _ = generator.generate(service)
+
+    container = manifests[0]["spec"]["template"]["spec"]["containers"][0]
+    assert container["resources"]["requests"] == {
+        "cpu": "200m",
+        "memory": "128Mi",
+    }

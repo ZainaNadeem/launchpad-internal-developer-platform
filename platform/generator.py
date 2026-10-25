@@ -194,11 +194,15 @@ def main(argv=None):
     )
     parser.add_argument("service", type=Path)
     parser.add_argument(
-        "-o", "--output", type=Path, default=Path("platform/generated.yaml"),
-        help="Output manifest path (default: platform/generated.yaml).",
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("platform/generated.yaml"),
+        help="Output manifest path.",
     )
     parser.add_argument(
-        "--strict", action="store_true",
+        "--strict",
+        action="store_true",
         help="Block generation on readiness warnings.",
     )
     args = parser.parse_args(argv)
@@ -206,11 +210,18 @@ def main(argv=None):
     try:
         service = load_service(args.service)
         manifests, report = generate(service, strict=args.strict)
-        with args.output.open("w", encoding="utf-8") as file:
-            yaml.safe_dump_all(manifests, file, sort_keys=False)
+
+        content = yaml.safe_dump_all(manifests, sort_keys=False)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(content, encoding="utf-8")
     except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
         print(f"FAIL  {error}")
         return 1
+
+    for finding in report["findings"]:
+        if finding["level"] == "WARN":
+            print(f"WARN  {finding['message']}")
+            print(f"      Fix: {finding['recommendation']}")
 
     print("LaunchPad service validated successfully")
     print(f"Readiness Score: {report['score']}/100")
