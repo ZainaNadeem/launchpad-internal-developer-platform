@@ -95,8 +95,14 @@ def build_deployment(service):
                                     "memory": service["resources"]["memory"],
                                 },
                                 "limits": {
-                                    "cpu": service["resources"]["cpu"],
-                                    "memory": service["resources"]["memory"],
+                                    "cpu": service["resources"].get(
+                                        "cpu_limit",
+                                        service["resources"]["cpu"],
+                                    ),
+                                    "memory": service["resources"].get(
+                                        "memory_limit",
+                                        service["resources"]["memory"],
+                                    ),
                                 },
                             },
                         }

@@ -11,42 +11,100 @@ import yaml
 NAME_PATTERN = re.compile(r"[a-z]([-a-z0-9]{0,61}[a-z0-9])?")
 
 
+def parse_quantity(value, resource):
+    """Return a positive quantity in CPU cores or memory bytes."""
+    if isinstance(value, bool):
+        raise ValueError("Boolean values are not resource quantities.")
+
+    number = r"([0-9]+(?:\.[0-9]+)?)"
+
+    if resource == "cpu":
+        match = re.fullmatch(number + r"(m)?", str(value))
+        if match is None:
+            raise ValueError("Use CPU values such as 100m or 0.5.")
+
+        amount = Decimal(match.group(1))
+        if match.group(2) == "m":
+            amount /= Decimal(1000)
+    else:
+        match = re.fullmatch(
+            number + r"([KMGTPE]i|[kMGTPE])?",
+            str(value),
+        )
+        if match is None:
+            raise ValueError("Use memory values such as 128Mi or 1Gi.")
+
+        amount = Decimal(match.group(1))
+        suffix = match.group(2)
+
+        if suffix:
+            if suffix.endswith("i"):
+                exponent = "KMGTPE".index(suffix[0]) + 1
+                amount *= Decimal(1024) ** exponent
+            else:
+                exponent = "kMGTPE".index(suffix) + 1
+                amount *= Decimal(1000) ** exponent
+
+    if amount <= 0:
+        raise ValueError("Resource quantities must be positive.")
+
+    return amount
+
+
 def check_settings(service, fail):
     """Validate resource quantities and autoscaling relationships."""
-
-    def positive_quantity(value, field, pattern):
-        if isinstance(value, bool):
-            match = None
-        else:
-            match = re.fullmatch(pattern, str(value))
-
-        if match is None or Decimal(match.group(1)) <= 0:
-            fail(
-                field,
-                f"{field} must be a positive supported resource quantity.",
-                "Use CPU values such as '100m' or '0.5', and memory "
-                "values such as '128Mi' or '1Gi'.",
-            )
-
     resources = service.get("resources")
+
     if isinstance(resources, dict):
-        # These patterns deliberately support a documented subset of
-        # Kubernetes quantities, rather than its entire quantity grammar.
-        number = r"([0-9]+(?:\.[0-9]+)?)"
+        parsed = {}
 
-        if "cpu" in resources:
-            positive_quantity(
-                resources["cpu"],
-                "resources.cpu",
-                number + r"(?:m)?",
-            )
+        fields = {
+            "cpu": "cpu",
+            "memory": "memory",
+            "cpu_limit": "cpu",
+            "memory_limit": "memory",
+        }
 
-        if "memory" in resources:
-            positive_quantity(
-                resources["memory"],
-                "resources.memory",
-                number + r"(?:[KMGTPE]i|[kMGTPE])?",
-            )
+        for field, resource in fields.items():
+            if field not in resources:
+                continue
+
+            try:
+                parsed[field] = parse_quantity(
+                    resources[field],
+                    resource,
+                )
+            except ValueError as error:
+                fail(
+                    f"resources.{field}",
+                    f"resources.{field} is invalid.",
+                    str(error),
+                )
+
+        for resource, default in (
+            ("cpu", "100m"),
+            ("memory", "128Mi"),
+        ):
+            limit_field = f"{resource}_limit"
+
+            if limit_field not in parsed:
+                continue
+
+            # Missing requests receive the generator's existing defaults.
+            if resource not in resources:
+                request = parse_quantity(default, resource)
+            elif resource in parsed:
+                request = parsed[resource]
+            else:
+                # The invalid request already has a finding.
+                continue
+
+            if parsed[limit_field] < request:
+                fail(
+                    f"resources.{limit_field}",
+                    f"{limit_field} cannot be below the {resource} request.",
+                    f"Increase {limit_field} or lower the {resource} request.",
+                )
 
     scaling = service.get("autoscaling")
     if not isinstance(scaling, dict):

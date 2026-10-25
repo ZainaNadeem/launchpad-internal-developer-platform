@@ -8,6 +8,8 @@ health_path: /health
 resources:
   cpu: 100m
   memory: 128Mi
+  cpu_limit: 500m
+  memory_limit: 256Mi
 
 autoscaling:
   enabled: true

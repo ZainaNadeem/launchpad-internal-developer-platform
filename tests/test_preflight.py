@@ -321,3 +321,68 @@ def test_cli_strict_mode_rejects_warnings(tmp_path, capsys):
     assert "WARN" in output
     assert "NEEDS_ATTENTION" in output
     assert "Recommendations:" in output
+
+
+@pytest.mark.parametrize(
+    ("resources", "expected_rule"),
+    [
+        (
+            {"cpu": "500m", "cpu_limit": "0.25"},
+            "resources.cpu_limit",
+        ),
+        (
+            {"memory": "1Gi", "memory_limit": "900Mi"},
+            "resources.memory_limit",
+        ),
+        (
+            {"cpu_limit": "0m"},
+            "resources.cpu_limit",
+        ),
+        (
+            {"memory_limit": True},
+            "resources.memory_limit",
+        ),
+        (
+            {"cpu_limit": "50m"},
+            "resources.cpu_limit",
+        ),
+        (
+            {"memory_limit": "64Mi"},
+            "resources.memory_limit",
+        ),
+    ],
+)
+def test_invalid_resource_limit_is_rejected(resources, expected_rule):
+    service = valid_service()
+    service["resources"] = resources
+
+    findings = preflight.check_schema(service)
+
+    assert any(
+        finding["rule"] == expected_rule
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "resources",
+    [
+        {
+            "cpu": "500m",
+            "cpu_limit": "0.5",
+            "memory": "1024Mi",
+            "memory_limit": "1Gi",
+        },
+        {
+            "cpu": "100m",
+            "cpu_limit": "1",
+            "memory": "128Mi",
+            "memory_limit": "256Mi",
+        },
+    ],
+)
+def test_resource_limits_accept_equivalent_or_larger_values(resources):
+    service = valid_service()
+    service["resources"] = resources
+
+    assert preflight.check_schema(service) == []

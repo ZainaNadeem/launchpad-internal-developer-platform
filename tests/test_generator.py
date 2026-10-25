@@ -206,3 +206,44 @@ def test_generation_fills_partial_resource_defaults():
         "cpu": "200m",
         "memory": "128Mi",
     }
+
+
+def test_generation_uses_separate_requests_and_limits():
+    service = valid_service()
+    service["resources"] = {
+        "cpu": "100m",
+        "memory": "64Mi",
+        "cpu_limit": "500m",
+        "memory_limit": "256Mi",
+    }
+
+    manifests, _ = generator.generate(service)
+    container = manifests[0]["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["resources"] == {
+        "requests": {
+            "cpu": "100m",
+            "memory": "64Mi",
+        },
+        "limits": {
+            "cpu": "500m",
+            "memory": "256Mi",
+        },
+    }
+
+
+def test_legacy_resources_keep_matching_limits():
+    manifests, _ = generator.generate(valid_service())
+    container = manifests[0]["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["resources"]["limits"] == (
+        container["resources"]["requests"]
+    )
+
+
+def test_generation_blocks_limit_below_request():
+    service = valid_service()
+    service["resources"]["cpu_limit"] = "50m"
+
+    with pytest.raises(ValueError, match="Preflight blocked generation"):
+        generator.generate(service)
