@@ -106,7 +106,9 @@ def test_cli_accepts_valid_yaml(tmp_path, capsys):
     )
 
     assert preflight.main([str(source)]) == 0
-    assert "PASS" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "WARN" in output
+    assert "NEEDS_ATTENTION" in output
 
 
 def test_cli_rejects_invalid_schema(tmp_path, capsys):
@@ -174,3 +176,148 @@ def test_invalid_settings_are_rejected(settings, expected_rule):
         finding["rule"] == expected_rule and finding["level"] == "FAIL"
         for finding in findings
     )
+
+
+def ready_service():
+    service = valid_service()
+    service["image"] = "payments-api@sha256:" + "a" * 64
+    service["resources"] = {
+        "cpu": "100m",
+        "memory": "128Mi",
+    }
+    service["autoscaling"] = {
+        "enabled": True,
+        "min_replicas": 2,
+        "max_replicas": 5,
+        "target_cpu": 70,
+    }
+    return service
+
+
+def test_ready_configuration_scores_100():
+    report = preflight.evaluate(ready_service())
+
+    assert report["score"] == 100
+    assert report["status"] == "READY"
+    assert all(
+        finding["level"] == "PASS"
+        for finding in report["findings"]
+    )
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "payments-api",
+        "payments-api:latest",
+        "payments-api:1.0.0",
+        "localhost:5000/payments-api:1",
+    ],
+)
+def test_mutable_image_reference_loses_image_points(image):
+    service = ready_service()
+    service["image"] = image
+
+    report = preflight.evaluate(service)
+
+    assert report["score"] == 80
+    assert report["status"] == "NEEDS_ATTENTION"
+    assert any(
+        finding["rule"] == "image" and finding["level"] == "WARN"
+        for finding in report["findings"]
+    )
+
+
+def test_missing_resources_have_actionable_warnings():
+    service = ready_service()
+    del service["resources"]
+
+    report = preflight.evaluate(service)
+
+    assert report["score"] == 70
+    warnings = {
+        finding["rule"]
+        for finding in report["findings"]
+        if finding["level"] == "WARN"
+    }
+    assert warnings == {"cpu", "memory"}
+
+
+def test_autoscaling_minimum_controls_availability_score():
+    service = ready_service()
+    service["replicas"] = 3
+    service["autoscaling"]["min_replicas"] = 1
+
+    report = preflight.evaluate(service)
+
+    assert report["score"] == 80
+    assert any(
+        finding["rule"] == "availability"
+        and finding["level"] == "WARN"
+        for finding in report["findings"]
+    )
+
+
+def test_fixed_replicas_can_pass_availability_without_autoscaling():
+    service = ready_service()
+    service["autoscaling"]["enabled"] = False
+
+    report = preflight.evaluate(service)
+
+    assert report["score"] == 85
+    assert any(
+        finding["rule"] == "availability"
+        and finding["level"] == "PASS"
+        for finding in report["findings"]
+    )
+
+
+def test_invalid_schema_has_no_readiness_score():
+    report = preflight.evaluate({"name": "payments-api"})
+
+    assert report["score"] is None
+    assert report["status"] == "INVALID"
+    assert preflight.exit_code(report) == 1
+
+
+def test_evaluation_is_deterministic_and_preserves_input():
+    service = ready_service()
+    original = copy.deepcopy(service)
+
+    first = preflight.evaluate(service)
+    second = preflight.evaluate(service)
+
+    assert first == second
+    assert service == original
+
+
+def test_warnings_only_fail_in_strict_mode():
+    service = ready_service()
+    service["image"] = "payments-api:latest"
+    report = preflight.evaluate(service)
+
+    assert preflight.exit_code(report) == 0
+    assert preflight.exit_code(report, strict=True) == 1
+
+
+def test_ready_configuration_passes_strict_mode():
+    report = preflight.evaluate(ready_service())
+
+    assert preflight.exit_code(report, strict=True) == 0
+
+
+def test_cli_strict_mode_rejects_warnings(tmp_path, capsys):
+    source = tmp_path / "service.yaml"
+    source.write_text(
+        "name: payments-api\n"
+        "image: payments-api:latest\n"
+        "port: 8000\n",
+        encoding="utf-8",
+    )
+
+    assert preflight.main([str(source), "--strict"]) == 1
+
+    output = capsys.readouterr().out
+    assert "WARN" in output
+    assert "NEEDS_ATTENTION" in output
+    assert "Recommendations:" in output

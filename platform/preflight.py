@@ -185,11 +185,138 @@ def check_schema(service):
     return findings
 
 
+def evaluate(service):
+    """Evaluate schema first, then explicit readiness policies."""
+    failures = check_schema(service)
+
+    if failures:
+        return {
+            "findings": failures,
+            "score": None,
+            "status": "INVALID",
+        }
+
+    findings = []
+
+    def policy(rule, passed, weight, message, recommendation):
+        findings.append(
+            {
+                "rule": rule,
+                "level": "PASS" if passed else "WARN",
+                "weight": weight,
+                "message": message,
+                "recommendation": "" if passed else recommendation,
+            }
+        )
+
+    policy(
+        "health",
+        "health_path" in service,
+        15,
+        "Explicit health endpoint configuration",
+        "Set health_path to the application's health endpoint.",
+    )
+
+    resources = service.get("resources", {})
+
+    policy(
+        "cpu",
+        "cpu" in resources,
+        15,
+        "Explicit CPU resource configuration",
+        "Set resources.cpu, for example '100m'.",
+    )
+
+    policy(
+        "memory",
+        "memory" in resources,
+        15,
+        "Explicit memory resource configuration",
+        "Set resources.memory, for example '128Mi'.",
+    )
+
+    scaling = service.get("autoscaling", {})
+    enabled = scaling.get("enabled", False)
+
+    # When autoscaling is enabled, its minimum controls the desired
+    # availability floor. Otherwise, use the fixed replica count.
+    replica_floor = (
+        scaling.get("min_replicas", 1)
+        if enabled
+        else service.get("replicas", 1)
+    )
+
+    policy(
+        "availability",
+        replica_floor >= 2,
+        20,
+        "At least two replicas in the configured availability floor",
+        "Use replicas >= 2, or autoscaling.min_replicas >= 2 "
+        "when autoscaling is enabled.",
+    )
+
+    policy(
+        "autoscaling",
+        enabled,
+        15,
+        "CPU autoscaling enabled",
+        "Consider enabling autoscaling for variable workloads. "
+        "A fixed replica count can still be appropriate for a local demo.",
+    )
+
+    # Tags can be moved, including version-looking tags. Require a
+    # SHA-256 digest to pass this image reproducibility policy.
+    digest_pinned = re.fullmatch(
+        r"[^@\s]+@sha256:[0-9a-fA-F]{64}",
+        service["image"],
+    ) is not None
+
+    policy(
+        "image",
+        digest_pinned,
+        20,
+        "Container image pinned by SHA-256 digest",
+        "Use a verified image digest for reproducible deployments. "
+        "Tags, including 'latest' and version tags, can change.",
+    )
+
+    score = sum(
+        finding["weight"]
+        for finding in findings
+        if finding["level"] == "PASS"
+    )
+
+    return {
+        "findings": findings,
+        "score": score,
+        "status": (
+            "READY"
+            if all(item["level"] == "PASS" for item in findings)
+            else "NEEDS_ATTENTION"
+        ),
+    }
+
+
+def exit_code(report, strict=False):
+    if report["status"] == "INVALID":
+        return 1
+
+    if strict and report["status"] == "NEEDS_ATTENTION":
+        return 1
+
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Check a LaunchPad service specification."
+        description="Check LaunchPad service schema and readiness."
     )
     parser.add_argument("service", type=Path)
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return a nonzero exit code for readiness warnings.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -199,19 +326,37 @@ def main(argv=None):
         print(f"FAIL  Cannot read service specification: {error}")
         return 1
 
-    findings = check_schema(service)
+    report = evaluate(service)
 
     print("LaunchPad Preflight")
 
-    if not findings:
-        print("PASS  Schema checks passed")
-        return 0
+    if isinstance(service, dict):
+        print(f"Service: {service.get('name', '<missing>')}")
 
-    for finding in findings:
+    print()
+
+    for finding in report["findings"]:
         print(f"{finding['level']}  {finding['message']}")
-        print(f"      Fix: {finding['recommendation']}")
 
-    return 1
+    score = report["score"]
+    print(
+        "\nReadiness Score: "
+        + ("N/A (invalid schema)" if score is None else f"{score}/100")
+    )
+    print(f"Status: {report['status']}")
+
+    recommendations = [
+        finding["recommendation"]
+        for finding in report["findings"]
+        if finding["recommendation"]
+    ]
+
+    if recommendations:
+        print("\nRecommendations:")
+        for recommendation in recommendations:
+            print(f"- {recommendation}")
+
+    return exit_code(report, strict=args.strict)
 
 
 if __name__ == "__main__":
