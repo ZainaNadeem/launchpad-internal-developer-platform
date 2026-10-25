@@ -2,12 +2,94 @@
 
 import argparse
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
 
 
 NAME_PATTERN = re.compile(r"[a-z]([-a-z0-9]{0,61}[a-z0-9])?")
+
+
+def check_settings(service, fail):
+    """Validate resource quantities and autoscaling relationships."""
+
+    def positive_quantity(value, field, pattern):
+        if isinstance(value, bool):
+            match = None
+        else:
+            match = re.fullmatch(pattern, str(value))
+
+        if match is None or Decimal(match.group(1)) <= 0:
+            fail(
+                field,
+                f"{field} must be a positive supported resource quantity.",
+                "Use CPU values such as '100m' or '0.5', and memory "
+                "values such as '128Mi' or '1Gi'.",
+            )
+
+    resources = service.get("resources")
+    if isinstance(resources, dict):
+        # These patterns deliberately support a documented subset of
+        # Kubernetes quantities, rather than its entire quantity grammar.
+        number = r"([0-9]+(?:\.[0-9]+)?)"
+
+        if "cpu" in resources:
+            positive_quantity(
+                resources["cpu"],
+                "resources.cpu",
+                number + r"(?:m)?",
+            )
+
+        if "memory" in resources:
+            positive_quantity(
+                resources["memory"],
+                "resources.memory",
+                number + r"(?:[KMGTPE]i|[kMGTPE])?",
+            )
+
+    scaling = service.get("autoscaling")
+    if not isinstance(scaling, dict):
+        return
+
+    enabled = scaling.get("enabled", False)
+    if type(enabled) is not bool:
+        fail(
+            "autoscaling.enabled",
+            "autoscaling.enabled must be a boolean.",
+            "Use true or false without quotes.",
+        )
+
+    bounds = {
+        "min_replicas": (1, 1000, 1),
+        "max_replicas": (1, 1000, 3),
+        "target_cpu": (1, 100, 70),
+    }
+
+    valid_values = {}
+
+    for field, (minimum, maximum, default) in bounds.items():
+        value = scaling.get(field, default)
+
+        if type(value) is not int or not minimum <= value <= maximum:
+            fail(
+                f"autoscaling.{field}",
+                f"autoscaling.{field} must be an integer "
+                f"from {minimum} to {maximum}.",
+                f"Set {field} to an integer within that range.",
+            )
+        else:
+            valid_values[field] = value
+
+    minimum = valid_values.get("min_replicas")
+    maximum = valid_values.get("max_replicas")
+
+    if minimum is not None and maximum is not None and minimum > maximum:
+        fail(
+            "autoscaling.bounds",
+            "min_replicas cannot exceed max_replicas.",
+            "Set max_replicas greater than or equal to min_replicas.",
+        )
 
 
 def check_schema(service):
@@ -99,6 +181,7 @@ def check_schema(service):
                 f"Place the {field} settings under indented child keys.",
             )
 
+    check_settings(service, fail)
     return findings
 
 

@@ -126,3 +126,51 @@ def test_cli_rejects_malformed_yaml(tmp_path):
 
 def test_cli_rejects_missing_file(tmp_path):
     assert preflight.main([str(tmp_path / "missing.yaml")]) == 1
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected_rule"),
+    [
+        ({"resources": {"cpu": "0m"}}, "resources.cpu"),
+        ({"resources": {"cpu": "-100m"}}, "resources.cpu"),
+        ({"resources": {"cpu": True}}, "resources.cpu"),
+        ({"resources": {"cpu": "100Mi"}}, "resources.cpu"),
+        ({"resources": {"memory": "0Mi"}}, "resources.memory"),
+        ({"resources": {"memory": "lots"}}, "resources.memory"),
+        ({"resources": {"memory": None}}, "resources.memory"),
+        (
+            {"autoscaling": {"enabled": "false"}},
+            "autoscaling.enabled",
+        ),
+        (
+            {"autoscaling": {"min_replicas": 0}},
+            "autoscaling.min_replicas",
+        ),
+        (
+            {"autoscaling": {"max_replicas": True}},
+            "autoscaling.max_replicas",
+        ),
+        (
+            {"autoscaling": {"target_cpu": 101}},
+            "autoscaling.target_cpu",
+        ),
+        (
+            {"autoscaling": {"target_cpu": "70"}},
+            "autoscaling.target_cpu",
+        ),
+        (
+            {"autoscaling": {"min_replicas": 5, "max_replicas": 2}},
+            "autoscaling.bounds",
+        ),
+    ],
+)
+def test_invalid_settings_are_rejected(settings, expected_rule):
+    service = valid_service()
+    service.update(settings)
+
+    findings = preflight.check_schema(service)
+
+    assert any(
+        finding["rule"] == expected_rule and finding["level"] == "FAIL"
+        for finding in findings
+    )
