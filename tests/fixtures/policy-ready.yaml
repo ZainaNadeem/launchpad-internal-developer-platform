@@ -1,0 +1,16 @@
+# Policy test fixture only. The synthetic digest is not deployable.
+name: policy-test
+image: example.invalid/policy-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+port: 8000
+replicas: 2
+health_path: /health
+
+resources:
+  cpu: 100m
+  memory: 128Mi
+
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 5
+  target_cpu: 70

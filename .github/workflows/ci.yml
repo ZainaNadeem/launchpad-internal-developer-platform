@@ -2,7 +2,9 @@ name: LaunchPad CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - feat/platform-preflight
 
   pull_request:
     branches: [main]
@@ -25,6 +27,21 @@ jobs:
 
       - name: Run tests
         run: python -m pytest
+
+      - name: Check local service specification
+        run: python platform/preflight.py platform/examples/service.yaml
+
+      - name: Generate local service manifests
+        run: |
+          python platform/generator.py platform/examples/service.yaml \
+            --output "${{ runner.temp }}/launchpad-demo.yaml"
+
+      - name: Enforce strict policy on test fixture
+        run: |
+          python platform/preflight.py tests/fixtures/policy-ready.yaml --strict
+          python platform/generator.py tests/fixtures/policy-ready.yaml \
+            --strict \
+            --output "${{ runner.temp }}/launchpad-policy-test.yaml"
 
       - name: Build Docker image
         run: docker build -t launchpad-demo:${{ github.sha }} .
