@@ -43,6 +43,16 @@ jobs:
             --strict \
             --output "${{ runner.temp }}/launchpad-policy-test.yaml"
 
+      - name: Report configuration benchmark
+        run: python platform/benchmark.py platform/examples/service.yaml --json
+
+      - name: Validate observability configuration
+        run: |
+          docker compose -f observability/compose.yaml config --quiet
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            prom/prometheus:v3.10.0 check config /etc/prometheus/prometheus.yml
+
       - name: Build Docker image
         run: docker build -t launchpad-demo:${{ github.sha }} .
 
