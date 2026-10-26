@@ -38,5 +38,5 @@ crash.log
 infrastructure/terraform/launchpad-generated.txt
 
 # Local Kubernetes files
-*.kubeconfigplatform/generated.yaml
+*.kubeconfig
 /platform/generated.yaml

@@ -6,3 +6,9 @@ __pycache__
 .pytest_cache
 .env
 README.md
+.aws
+.codex
+.agents
+infrastructure/terraform/.terraform
+**/*.tfstate
+**/*.tfstate.*
